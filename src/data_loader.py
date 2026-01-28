@@ -3,6 +3,7 @@ Data loading module for KPI and alarm data.
 """
 import pandas as pd
 import json
+import re
 from datetime import datetime
 from dateutil import parser
 from typing import Optional
@@ -62,6 +63,38 @@ def extract_node_from_managed_object(managed_object: str) -> Optional[str]:
     except Exception:
         pass
     return None
+
+
+def extract_node_id_from_managed_object(managed_object: str) -> Optional[str]:
+    """
+    Extract canonical node ID (numeric part) from managedObjectClass.
+    Used for same-node matching with KPI data.
+
+    Examples:
+        "PLMN-PLMN/MRBTS-1900/..." -> "1900"
+        "PLMN-PLMN/BSC-388042/..." -> "388042"
+    """
+    if not managed_object:
+        return None
+    match = re.search(r'(?:MRBTS-|BSC-)(\d+)', managed_object)
+    return match.group(1) if match else None
+
+
+def normalize_to_node_id(node: str) -> str:
+    """
+    Normalize a node identifier to canonical node ID for matching.
+    If node is MRBTS-X or BSC-X, return the numeric part; otherwise return as-is.
+
+    Examples:
+        "MRBTS-1900" -> "1900"
+        "BSC-388042" -> "388042"
+        "1900" -> "1900"
+    """
+    if not node:
+        return ""
+    s = str(node).strip()
+    match = re.search(r'(?:MRBTS-|BSC-)(\d+)', s)
+    return match.group(1) if match else s
 
 
 def extract_node_from_nbi_info(nbi_info: str) -> Optional[str]:
@@ -245,6 +278,8 @@ def load_alarms_data(json_path: str) -> pd.DataFrame:
         if not node:
             node = extract_node_from_nbi_info(nbi_info)
         
+        node_id = extract_node_id_from_managed_object(managed_object)
+        
         # Parse timestamps
         alarm_raised = parse_alarm_timestamp(alarm.get('alarmRaisedTime', ''))
         alarm_cleared = parse_alarm_timestamp(alarm.get('alarmClearedTime', ''))
@@ -256,6 +291,7 @@ def load_alarms_data(json_path: str) -> pd.DataFrame:
         alarm_records.append({
             'alarm_id': alarm.get('alarmId', ''),
             'node': node,
+            'node_id': node_id,
             'timestamp': primary_timestamp,
             'alarm_raised_time': alarm_raised,
             'alarm_cleared_time': alarm_cleared,
