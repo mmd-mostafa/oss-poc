@@ -113,10 +113,11 @@ The system consists of several interconnected components:
   2. Extracts node identifiers from:
      - `managedObjectClass` (e.g., "PLMN-PLMN/MRBTS-685256/...")
      - `nbiOptionalInformation` (e.g., "NEName=EMH229|siteObjName=...")
-  3. Parses timestamps from `alarmRaisedTime`, `alarmClearedTime`, or `nbiEventTime`
-  4. Standardizes to DataFrame with columns: `alarm_id`, `node`, `timestamp`, `perceived_severity`, `alarm_type`, `specific_problem`, `probable_cause`, etc.
-  5. Removes rows with missing timestamps
-  6. Sorts by timestamp
+  3. Extracts **canonical node ID** (`node_id`) from `managedObjectClass` as the numeric part of `MRBTS-X` or `BSC-X` (e.g. `1900` from `MRBTS-1900`). Used for same-node correlation with KPI data.
+  4. Parses timestamps from `alarmRaisedTime`, `alarmClearedTime`, or `nbiEventTime`
+  5. Standardizes to DataFrame with columns: `alarm_id`, `node`, `node_id`, `timestamp`, `perceived_severity`, `alarm_type`, `specific_problem`, `probable_cause`, etc.
+  6. Removes rows with missing timestamps
+  7. Sorts by timestamp
 
 ### 2. Degradation Detector (`src/degradation_detector.py`)
 
@@ -131,11 +132,11 @@ The system consists of several interconnected components:
 
 ### 3. Alarm Correlator (`src/alarm_correlator.py`)
 
-**Purpose**: Correlates alarms with degradation periods based on node matching and time windows.
+**Purpose**: Correlates alarms with degradation periods based on same-node matching and time windows.
 
 #### Key Features
 
-- **Node Matching**: Supports exact, normalized, and fuzzy node name matching
+- **Node Matching**: Same-node matching via canonical node ID from `managedObjectClass` (numeric part of MRBTS-X or BSC-X). Only alarms on the same node as the KPI degradation are correlated.
 - **Time Window**: Configurable time window (before and after degradation period)
 - **Temporal Relationships**: Classifies alarms as BEFORE, DURING, or AFTER degradation
 
@@ -276,16 +277,11 @@ For each detected degradation, the system searches for alarms within a configura
 
 ### Node Matching
 
-The system uses multiple strategies to match alarms to degradation nodes:
+Correlation uses **same-node matching** via a canonical node ID derived from `managedObjectClass`:
 
-1. **Exact Match**: Direct node identifier match
-2. **Normalized Match**: 
-   - Removes common suffixes (_TWL, _ZH, _OD)
-   - Case-insensitive comparison
-3. **Fuzzy Match**: 
-   - Partial string matching
-   - MRBTS/BSC number matching
-   - Managed object path parsing
+- **Canonical node ID**: The numeric part of `MRBTS-X` or `BSC-X` in the alarm's `managedObjectClass` (e.g. `"PLMN-PLMN/MRBTS-1900/EQM_R-4/..."` → `1900`). This must match the node identifier used in the KPI data for the degradation.
+- **Strict same-node filter**: For each degradation, only alarms whose canonical node ID **equals** the degradation's node ID are considered. There is no fuzzy or cross-node matching.
+- **Alarms without MRBTS/BSC**: Alarms whose `managedObjectClass` contains neither `MRBTS-` nor `BSC-` have no canonical node ID and are **not** correlated to any degradation by node.
 
 ### Temporal Relationship Classification
 
@@ -530,7 +526,7 @@ Based on the analysis, the LLM suggests actions such as:
 **Required Fields**:
 - `alarmId`: Unique alarm identifier
 - `alarmRaisedTime` or `nbiEventTime`: Timestamp (format: "YYYY-M-D,HH:MM:SS.s,+T:0")
-- `managedObjectClass`: Managed object path (e.g., "PLMN-PLMN/MRBTS-685256/...")
+- `managedObjectClass`: Managed object path (e.g., "PLMN-PLMN/MRBTS-685256/..."). The numeric part of `MRBTS-X` or `BSC-X` is used as the canonical node ID for same-node correlation with KPI data.
 - `perceivedSeverity`: Alarm severity (CRITICAL, MAJOR, MINOR, WARNING, CLEARED)
 - `alarmType`: Type of alarm (QUALITY_OF_SERVICE_ALARM, COMMUNICATIONS_ALARM, etc.)
 - `specificProblem`: Specific problem description
@@ -627,12 +623,12 @@ Based on the analysis, the LLM suggests actions such as:
 #### Alarms Not Correlating
 
 **Possible Causes**:
-- Node names don't match between KPI and alarms
+- Canonical node ID mismatch: KPI node does not match the numeric part of `MRBTS-X` or `BSC-X` in alarm `managedObjectClass`, or alarms lack MRBTS/BSC in `managedObjectClass`
 - Time window too narrow
 - Alarms outside time window
 
 **Solutions**:
-- Check node identifiers in both datasets
+- Ensure KPI node matches the numeric part of MRBTS/BSC in alarm `managedObjectClass`; check node identifiers in both datasets
 - Increase time window (time before/after)
 - Verify alarm timestamps are correct
 
@@ -689,7 +685,7 @@ Based on the analysis, the LLM suggests actions such as:
 ### Data Quality
 
 - **Ensure complete data**: Missing timestamps or values can cause issues
-- **Validate node names**: Consistent naming helps with correlation
+- **Validate node alignment**: KPI node identifiers should match the numeric part of `MRBTS-X` or `BSC-X` in alarm `managedObjectClass` so same-node correlation works (e.g. KPI node `1900` with alarms on `MRBTS-1900`).
 - **Check date ranges**: Ensure KPI and alarm data overlap in time
 
 ---
@@ -725,6 +721,6 @@ For questions or issues, please refer to the project repository or contact the d
 
 ---
 
-**Document Version**: 1.0  
+**Document Version**: 1.1  
 **Last Updated**: January 2026  
 **Maintained by**: Qeema Development Team
