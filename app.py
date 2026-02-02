@@ -472,6 +472,11 @@ def show_degradation_details(results: dict, pipeline: ProcessingPipeline):
             for i, reason in enumerate(analysis['top_reasons'], 1):
                 st.write(f"{i}. {reason}")
         
+        # Root cause analysis (optional)
+        if analysis.get('root_cause_analysis'):
+            st.write("**Root Cause Analysis:**")
+            st.info(analysis['root_cause_analysis'])
+        
         # Alarm analysis
         if analysis.get('alarm_analysis'):
             st.write("**Per-Alarm Analysis:**")
@@ -479,6 +484,13 @@ def show_degradation_details(results: dict, pipeline: ProcessingPipeline):
                 with st.expander(f"Alarm {alarm_analysis.get('alarm_id', 'Unknown')} - Relevance: {alarm_analysis.get('relevance_score', 0):.1%}"):
                     st.write(f"**Is Causal:** {alarm_analysis.get('is_causal', False)}")
                     st.write(f"**Reasoning:** {alarm_analysis.get('reasoning', 'N/A')}")
+                    if alarm_analysis.get('lifespan_note'):
+                        st.write(f"**Lifespan:** {alarm_analysis['lifespan_note']}")
+                    steps = alarm_analysis.get('suggested_fix') or alarm_analysis.get('remediation_steps')
+                    if steps and isinstance(steps, list):
+                        st.write("**Suggested fix / Remediation:**")
+                        for step in steps:
+                            st.write(f"- {step}")
         
         # Recommended actions
         if analysis.get('recommended_actions'):

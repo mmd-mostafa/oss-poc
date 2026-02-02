@@ -106,17 +106,22 @@ RRC SR is a critical KPI that measures the success rate of RRC connection establ
 
 {alarms_info}
 
-Please analyze the correlation between the degradation and the alarms. Provide your analysis in the following JSON format:
+Please analyze the correlation between the degradation and the alarms. For each alarm, infer from its Status timeline whether it was CLEARED within the time window (last event is CLEARED) or STILL ACTIVE at the end; mention this in your analysis and use it when judging causality (e.g. cleared during degradation may suggest a transient issue or that the condition was resolved).
+
+Provide your analysis in the following JSON format. Include the optional fields when relevant.
 
 {{
     "overall_verdict": "causal" | "possible" | "coincidental" | "no_correlation",
     "confidence_score": 0.0-1.0,
+    "root_cause_analysis": "optional: short paragraph on likely root cause(s) and how alarm lifespans support or contradict that",
     "alarm_analysis": [
         {{
             "alarm_id": "string",
             "relevance_score": 0.0-1.0,
             "is_causal": true/false,
-            "reasoning": "explanation"
+            "reasoning": "explanation",
+            "lifespan_note": "optional: e.g. Cleared during window at 14:18:15 or Still active at end of time window",
+            "suggested_fix": ["optional: 1-3 concrete steps to address this alarm, e.g. Verify RU link", "Restart affected sector"]
         }}
     ],
     "top_reasons": [
@@ -125,11 +130,10 @@ Please analyze the correlation between the degradation and the alarms. Provide y
         "reason 3"
     ],
     "recommended_actions": [
-        "action 1",
-        "action 2",
-        "action 3"
+        "specific, ordered action 1 (e.g. Isolate and restart BBU for node X)",
+        "specific action 2 (e.g. Collect traces if degradation persists)"
     ],
-    "analysis_summary": "detailed explanation of the correlation analysis"
+    "analysis_summary": "detailed explanation that explicitly references alarm lifespans where relevant (e.g. Alarm A was cleared at 14:20; Alarm B remained active)"
 }}
 
 Guidelines:
@@ -144,7 +148,8 @@ Consider:
 3. Alarm types that typically affect RRC SR (service affecting, radio issues, hardware failures)
 4. Alarm severity and duration
 5. Historical patterns
-6. When an alarm has a "Status timeline", treat it as one alarm's full lifecycle (raised, severity changes, cleared). Use the timeline to judge causality (e.g. alarm raised before degradation and cleared during vs. raised and cleared before degradation).
+6. Alarm lifespan: from each alarm's Status timeline, note if it was cleared in the window or still active. Mention this in analysis_summary and in each alarm's lifespan_note. Use it to judge causality (e.g. alarm cleared during degradation vs still active at end).
+7. Remediation: for each alarm provide 1-3 concrete suggested_fix steps based on alarm type, specific problem, and probable cause. recommended_actions should be specific and ordered (what to do, in what order; prefer e.g. Check X, Restart Y, Replace Z over vague advice).
 
 If no alarms are found, recommend further investigation steps."""
         
@@ -205,6 +210,7 @@ If no alarms are found, recommend further investigation steps."""
                 return {
                     "overall_verdict": "no_correlation",
                     "confidence_score": 0.0,
+                    "root_cause_analysis": "",
                     "alarm_analysis": [],
                     "top_reasons": ["Failed to parse LLM response"],
                     "recommended_actions": ["Review LLM response manually"],
@@ -217,6 +223,7 @@ If no alarms are found, recommend further investigation steps."""
                 return {
                     "overall_verdict": "no_correlation",
                     "confidence_score": 0.0,
+                    "root_cause_analysis": "",
                     "alarm_analysis": [],
                     "top_reasons": ["LLM API error"],
                     "recommended_actions": ["Check API key and network connection"],
@@ -228,6 +235,7 @@ If no alarms are found, recommend further investigation steps."""
         return {
             "overall_verdict": "no_correlation",
             "confidence_score": 0.0,
+            "root_cause_analysis": "",
             "alarm_analysis": [],
             "top_reasons": ["Unknown error"],
             "recommended_actions": ["Retry analysis"],
