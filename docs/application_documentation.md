@@ -132,22 +132,24 @@ The system consists of several interconnected components:
 
 ### 3. Alarm Correlator (`src/alarm_correlator.py`)
 
-**Purpose**: Correlates alarms with degradation periods based on same-node matching and time windows.
+**Purpose**: Correlates alarms with degradation periods based on same-node matching and time windows, then consolidates by alarm ID so each unique alarm is represented once with its full status lifecycle.
 
 #### Key Features
 
 - **Node Matching**: Same-node matching via canonical node ID from `managedObjectClass` (numeric part of MRBTS-X or BSC-X). Only alarms on the same node as the KPI degradation are correlated.
 - **Time Window**: Configurable time window (before and after degradation period)
-- **Temporal Relationships**: Classifies alarms as BEFORE, DURING, or AFTER degradation
+- **Temporal Relationships**: Classifies alarms as BEFORE, DURING, or AFTER degradation (based on the earliest event in the window for each alarm)
+- **Consolidation by Alarm ID**: Within each degradation's time window, alarm events are grouped by `alarm_id`. Each alarm may have multiple status events (raised, severity changes, cleared). The correlator outputs **one row per unique alarm ID** with a **status timeline**: a chronological list of events (timestamp, perceived severity, cleared flag) so downstream analysis and the LLM see the full lifespan of each alarm
 
 ### 4. LLM Agent (`src/llm_agent.py`)
 
-**Purpose**: Uses OpenAI's LLM to evaluate correlations and determine causality.
+**Purpose**: Uses OpenAI's LLM to evaluate correlations and determine causality, with lifespan-aware analysis and concrete remediation recommendations.
 
 #### Key Features
 
-- **Prompt Engineering**: Builds comprehensive prompts with degradation and alarm details
-- **JSON Response**: Structured JSON output with verdicts, confidence scores, and recommendations
+- **Prompt Engineering**: Builds comprehensive prompts with degradation details and consolidated alarms including a **status timeline** (chronological status events) per alarm so the LLM can reason about alarm lifespan (raised, severity changes, cleared)
+- **Lifespan-Aware Analysis**: Instructs the LLM to note whether each alarm was cleared in the time window or still active, and to use this when judging causality
+- **JSON Response**: Structured JSON with verdicts, confidence score, **root_cause_analysis** (optional), per-alarm **lifespan_note** and **suggested_fix** / **remediation_steps**, top reasons, ordered recommended actions, and analysis summary that references alarm lifespans
 - **Error Handling**: Robust error handling with retries and fallback responses
 
 ### 5. Processing Pipeline (`src/pipeline.py`)
@@ -293,12 +295,23 @@ Alarms are classified based on their timing relative to the degradation:
 
 **Rationale**: Alarms that occur BEFORE or DURING are more likely to be causal.
 
+### Consolidation by Alarm ID
+
+Within the time window for each degradation, the system **consolidates alarm events by alarm ID**:
+
+- **Input**: Raw alarm events (one row per event; the same `alarm_id` can appear multiple times with different timestamps and severities, e.g. raised, updated, cleared).
+- **Output**: One row per unique alarm ID. Each consolidated alarm includes:
+  - Identity and static fields (alarm_id, node, alarm_type, specific_problem, probable_cause, etc.)
+  - Temporal relationship and time offset from degradation start (from the **earliest** event in the window)
+  - **Status timeline**: A chronological list of events, each with timestamp, perceived severity, and a cleared flag. This allows the LLM and UI to reason about the alarm's full lifespan (e.g. raised then cleared during the window vs. still active at the end).
+
+So instead of e.g. five correlated "alarms" that are really three unique alarm IDs with multiple events, the system presents three consolidated alarms, each with a full status timeline.
+
 ### Correlation Output
 
 For each degradation, the system provides:
-- List of correlated alarms
-- Temporal relationship for each alarm
-- Time offset from degradation start
+- List of **consolidated** correlated alarms (one per unique alarm ID)
+- For each alarm: temporal relationship, time offset from degradation start, and **status timeline** (chronological list of status events)
 - All alarm details (severity, type, problem description, etc.)
 
 ---
@@ -319,9 +332,9 @@ The LLM agent evaluates correlations to determine:
 
 The prompt includes:
 - Degradation details (node, timestamps, duration, severity, deviation)
-- All correlated alarms with full details
+- All correlated alarms (consolidated by alarm ID) with full details and a **status timeline** (chronological list of status events: timestamp, severity, cleared) per alarm so the LLM knows each alarm's lifespan
 - Context about RRC SR and common causes
-- Guidelines for evaluation
+- Guidelines for evaluation, including use of alarm lifespan (cleared vs. still active) when judging causality
 
 #### Step 2: LLM Evaluation
 
@@ -331,16 +344,26 @@ The LLM analyzes:
 - **Alarm types**: Whether alarm types typically affect RRC SR
 - **Alarm severity**: Critical alarms are more likely to be causal
 - **Service impact**: Whether alarms are service-affecting
+- **Alarm lifespan**: From each alarm's status timeline, whether it was **cleared** within the time window or **still active** at the end; this is used when judging causality (e.g. cleared during degradation may suggest a transient issue or that the condition was resolved)
 
 #### Step 3: Structured Response
 
 The LLM returns JSON with:
 - **Overall Verdict**: causal | possible | coincidental | no_correlation
 - **Confidence Score**: 0.0 to 1.0
-- **Per-Alarm Analysis**: Relevance score and reasoning for each alarm
+- **Root Cause Analysis** (optional): Short paragraph on likely root cause(s) and how alarm lifespans support or contradict that
+- **Per-Alarm Analysis**: For each alarm: relevance score, is_causal, reasoning; **lifespan_note** (e.g. "Cleared during window at 14:18:15" or "Still active at end of time window"); **suggested_fix** or **remediation_steps** (1–3 concrete steps to address that alarm, based on alarm type, specific problem, and probable cause)
 - **Top Reasons**: Key factors supporting the verdict
-- **Recommended Actions**: Specific remediation steps
-- **Analysis Summary**: Detailed explanation
+- **Recommended Actions**: Specific, ordered remediation steps (e.g. "Isolate and restart BBU for node X", "Collect traces if degradation persists")
+- **Analysis Summary**: Detailed explanation that explicitly references alarm lifespans where relevant (e.g. "Alarm A was cleared at 14:20; Alarm B remained active")
+
+### Alarm Lifespan and Enriched Output
+
+The LLM is instructed to observe each alarm's **status timeline** and to:
+- Note whether each alarm was **cleared** in the time window (last event is CLEARED) or **still active** at the end, and mention this in the analysis
+- Use lifespan when judging causality (e.g. alarm cleared during degradation vs. still active)
+- Provide **per-alarm suggested fixes** (1–3 concrete steps) based on alarm type, specific problem, and probable cause
+- Provide a **root cause analysis** paragraph when relevant, and make **recommended actions** specific and ordered
 
 ### Verdict Categories
 
@@ -439,11 +462,12 @@ Based on the analysis, the LLM suggests actions such as:
 **Features**:
 - Select specific degradation from dropdown
 - View detailed degradation information
-- See all correlated alarms
+- See all correlated alarms (consolidated by alarm ID; one row per unique alarm with a **Status Timeline** column showing the chronological status events, e.g. "14:18:14 CRITICAL; 14:18:15 CLEARED")
 - Review LLM analysis (if enabled):
   - Overall verdict and confidence
   - Top reasons
-  - Per-alarm analysis
+  - Root cause analysis (when present)
+  - Per-alarm analysis: relevance, is causal, reasoning; **lifespan note** (cleared in window vs. still active); **suggested fix / remediation steps** (when present)
   - Recommended actions
   - Detailed analysis summary
 
@@ -460,11 +484,11 @@ Based on the analysis, the LLM suggests actions such as:
 #### 5. Alarms Summary Tab
 
 **Features**:
-- Summary statistics (total alarms, unique types, unique severities)
+- Summary statistics (total correlated alarms—unique by alarm ID—unique types, unique severities)
 - Alarm type frequency (pie chart)
 - Severity distribution (bar chart)
 - Most correlated alarm types table
-- All correlated alarms table
+- All correlated alarms table (one row per unique alarm ID; optional **Status Timeline** column with compact timeline string when present)
 
 ---
 
@@ -721,6 +745,6 @@ For questions or issues, please refer to the project repository or contact the d
 
 ---
 
-**Document Version**: 1.1  
-**Last Updated**: January 2026  
+**Document Version**: 1.2  
+**Last Updated**: February 2026  
 **Maintained by**: Qeema Development Team
