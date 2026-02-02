@@ -12,6 +12,23 @@ import base64
 from src.pipeline import ProcessingPipeline
 from src.data_loader import load_kpi_data, load_alarms_data
 
+
+def _format_status_timeline_short(timeline) -> str:
+    """Format status_timeline list as compact string for display (e.g. '14:18:14 CRITICAL; 14:18:15 CLEARED')."""
+    if not timeline or not isinstance(timeline, list):
+        return "-"
+    parts = []
+    for ev in timeline:
+        ts = ev.get("timestamp", "") or ""
+        if "T" in str(ts):
+            ts = str(ts).split("T")[-1][:8]
+        elif len(str(ts)) > 8:
+            ts = str(ts)[:8]
+        sev = ev.get("perceived_severity", "") or ""
+        parts.append(f"{ts} {sev}".strip())
+    return "; ".join(parts) if parts else "-"
+
+
 # Page configuration
 st.set_page_config(
     page_title="RRC SR Degradation Analysis",
@@ -400,20 +417,30 @@ def show_degradation_details(results: dict, pipeline: ProcessingPipeline):
     
     st.markdown("---")
     
-    # Correlated alarms
+    # Correlated alarms (consolidated by alarm_id; one row per unique alarm)
     st.subheader("Correlated Alarms")
     alarms_df = correlations.get(actual_idx, pd.DataFrame())
     
     if len(alarms_df) == 0:
         st.info("No alarms found in the time window for this degradation.")
     else:
-        st.write(f"Found {len(alarms_df)} alarm(s) in the time window:")
+        st.write(f"Found {len(alarms_df)} unique alarm(s) in the time window (consolidated by alarm ID):")
         
-        display_alarms = alarms_df[[
+        display_cols = [
             'alarm_id', 'timestamp', 'temporal_relationship', 'perceived_severity',
             'alarm_type', 'specific_problem', 'probable_cause'
-        ]].copy()
-        display_alarms['timestamp'] = display_alarms['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
+        ]
+        display_alarms = alarms_df[[c for c in display_cols if c in alarms_df.columns]].copy()
+        if 'timestamp' in display_alarms.columns:
+            try:
+                if pd.api.types.is_datetime64_any_dtype(display_alarms['timestamp']):
+                    display_alarms['timestamp'] = display_alarms['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    display_alarms['timestamp'] = display_alarms['timestamp'].astype(str)
+            except (TypeError, AttributeError):
+                display_alarms['timestamp'] = display_alarms['timestamp'].astype(str)
+        if 'status_timeline' in alarms_df.columns:
+            display_alarms['Status Timeline'] = alarms_df['status_timeline'].map(_format_status_timeline_short)
         display_alarms.columns = [col.replace('_', ' ').title() for col in display_alarms.columns]
         st.dataframe(display_alarms, use_container_width=True)
     
@@ -605,13 +632,23 @@ def show_alarms_summary(results: dict, pipeline: ProcessingPipeline):
     
     st.markdown("---")
     
-    # Alarms table
+    # Alarms table (consolidated by alarm_id)
     st.subheader("All Correlated Alarms")
-    display_df = correlated_alarms_df[[
+    summary_cols = [
         'alarm_id', 'node', 'timestamp', 'temporal_relationship',
         'perceived_severity', 'alarm_type', 'specific_problem'
-    ]].copy()
-    display_df['timestamp'] = display_df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    ]
+    display_df = correlated_alarms_df[[c for c in summary_cols if c in correlated_alarms_df.columns]].copy()
+    if 'timestamp' in display_df.columns:
+        try:
+            if pd.api.types.is_datetime64_any_dtype(display_df['timestamp']):
+                display_df['timestamp'] = display_df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
+            else:
+                display_df['timestamp'] = display_df['timestamp'].astype(str)
+        except (TypeError, AttributeError):
+            display_df['timestamp'] = display_df['timestamp'].astype(str)
+    if 'status_timeline' in correlated_alarms_df.columns:
+        display_df['Status Timeline'] = correlated_alarms_df['status_timeline'].map(_format_status_timeline_short)
     display_df.columns = [col.replace('_', ' ').title() for col in display_df.columns]
     st.dataframe(display_df, use_container_width=True, height=400)
 

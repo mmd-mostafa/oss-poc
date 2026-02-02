@@ -55,22 +55,39 @@ Degradation Details:
 """
         
         # Format alarm information
-        alarms_info = "\nRelated Alarms:\n"
+        alarms_info = "\nRelated Alarms (one entry per unique alarm ID; each may have multiple status events in the time window):\n"
         if alarms:
             for i, alarm in enumerate(alarms, 1):
-                alarms_info += f"""
+                ts = alarm.get('timestamp', 'Unknown')
+                if hasattr(ts, 'isoformat'):
+                    ts = ts.isoformat()
+                elif ts != 'Unknown':
+                    ts = str(ts)
+                block = f"""
 Alarm {i}:
 - Alarm ID: {alarm.get('alarm_id', 'Unknown')}
-- Timestamp: {alarm.get('timestamp', 'Unknown')}
-- Temporal Relationship: {alarm.get('temporal_relationship', 'Unknown')}
-- Time from Degradation Start: {alarm.get('time_from_degradation_start', 0):.1f} minutes
-- Severity: {alarm.get('perceived_severity', 'Unknown')}
+- First event in window - Temporal Relationship: {alarm.get('temporal_relationship', 'Unknown')}
+- Time from Degradation Start: {float(alarm.get('time_from_degradation_start') or 0):.1f} minutes
 - Alarm Type: {alarm.get('alarm_type', 'Unknown')}
 - Specific Problem: {alarm.get('specific_problem', 'Unknown')}
 - Probable Cause: {alarm.get('probable_cause', 'Unknown')}
-- Additional Text: {alarm.get('additional_text', 'N/A')[:200]}...
-- Managed Object: {alarm.get('managed_object_class', 'Unknown')[:100]}...
+- Additional Text: {alarm.get('additional_text', 'N/A')[:200] if alarm.get('additional_text') else 'N/A'}...
+- Managed Object: {(alarm.get('managed_object_class') or 'Unknown')[:100]}...
 """
+                status_timeline = alarm.get('status_timeline')
+                if status_timeline and isinstance(status_timeline, list):
+                    timeline_parts = []
+                    for ev in status_timeline:
+                        t = ev.get('timestamp', 'unknown')
+                        sev = ev.get('perceived_severity', 'unknown')
+                        cleared = ev.get('cleared', False)
+                        label = "cleared" if cleared else "raised/updated"
+                        timeline_parts.append(f"{t} - {sev} ({label})")
+                    block += "- Status timeline (chronological): " + "; ".join(timeline_parts) + "\n"
+                else:
+                    block += f"- Severity: {alarm.get('perceived_severity', 'Unknown')}\n"
+                    block += f"- Timestamp: {ts}\n"
+                alarms_info += block
         else:
             alarms_info += "No alarms found in the time window.\n"
         
@@ -127,6 +144,7 @@ Consider:
 3. Alarm types that typically affect RRC SR (service affecting, radio issues, hardware failures)
 4. Alarm severity and duration
 5. Historical patterns
+6. When an alarm has a "Status timeline", treat it as one alarm's full lifecycle (raised, severity changes, cleared). Use the timeline to judge causality (e.g. alarm raised before degradation and cleared during vs. raised and cleared before degradation).
 
 If no alarms are found, recommend further investigation steps."""
         

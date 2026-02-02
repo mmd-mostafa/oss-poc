@@ -3,12 +3,21 @@ Alarm correlation module for finding alarms within degradation time windows.
 """
 import pandas as pd
 from datetime import timedelta
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 
 from .data_loader import (
     normalize_to_node_id,
     extract_node_id_from_managed_object,
 )
+
+
+def _timestamp_to_str(ts: Any) -> str:
+    """Convert timestamp to ISO string for serialization."""
+    if ts is None or (isinstance(ts, float) and pd.isna(ts)):
+        return "unknown"
+    if hasattr(ts, "isoformat"):
+        return ts.isoformat()
+    return str(ts)
 
 
 class AlarmCorrelator:
@@ -27,6 +36,70 @@ class AlarmCorrelator:
         managed = alarm.get('managed_object_class', '') or alarm.get('managedObjectClass', '')
         node_id = extract_node_id_from_managed_object(managed)
         return str(node_id) if node_id else None
+    
+    def _consolidate_by_alarm_id(self, matched_alarms: List[Dict]) -> List[Dict]:
+        """
+        Group matched alarms by alarm_id and build one consolidated alarm per ID
+        with a chronological status_timeline (timestamp, severity, cleared).
+        """
+        if not matched_alarms:
+            return []
+        
+        # Group by alarm_id
+        by_id: Dict[str, List[Dict]] = {}
+        for alarm in matched_alarms:
+            aid = alarm.get("alarm_id") or ""
+            by_id.setdefault(aid, []).append(alarm)
+        
+        consolidated = []
+        for alarm_id, group in by_id.items():
+            # Sort group by timestamp ascending for timeline
+            group_sorted = sorted(
+                group,
+                key=lambda r: (r.get("timestamp") or pd.Timestamp.min)
+                if pd.notna(r.get("timestamp")) else pd.Timestamp.min,
+            )
+            # Build status_timeline: list of {timestamp, perceived_severity, cleared}
+            status_timeline = []
+            for row in group_sorted:
+                ts = row.get("timestamp")
+                severity = row.get("perceived_severity") or "unknown"
+                cleared = str(severity).upper() == "CLEARED" or (
+                    row.get("alarm_cleared_time") is not None
+                    and pd.notna(row.get("alarm_cleared_time"))
+                )
+                status_timeline.append({
+                    "timestamp": _timestamp_to_str(ts),
+                    "perceived_severity": severity,
+                    "cleared": cleared,
+                })
+            
+            # Take static fields from first row; temporal from earliest event
+            first = group_sorted[0]
+            earliest = group_sorted[0]
+            
+            consolidated.append({
+                "alarm_id": alarm_id,
+                "node": first.get("node"),
+                "node_id": first.get("node_id"),
+                "alarm_type": first.get("alarm_type"),
+                "specific_problem": first.get("specific_problem"),
+                "probable_cause": first.get("probable_cause"),
+                "additional_text": first.get("additional_text"),
+                "managed_object_class": first.get("managed_object_class"),
+                "nbi_optional_info": first.get("nbi_optional_info"),
+                "event_type": first.get("event_type"),
+                "temporal_relationship": earliest.get("temporal_relationship"),
+                "time_from_degradation_start": earliest.get("time_from_degradation_start"),
+                "perceived_severity": first.get("perceived_severity"),
+                "alarm_raised_time": first.get("alarm_raised_time"),
+                "alarm_cleared_time": first.get("alarm_cleared_time"),
+                "event_time": first.get("event_time"),
+                "timestamp": earliest.get("timestamp"),
+                "status_timeline": status_timeline,
+            })
+        
+        return consolidated
     
     def find_alarms_in_window(
         self,
@@ -83,7 +156,8 @@ class AlarmCorrelator:
         if not matched_alarms:
             return pd.DataFrame()
         
-        result_df = pd.DataFrame(matched_alarms)
+        consolidated = self._consolidate_by_alarm_id(matched_alarms)
+        result_df = pd.DataFrame(consolidated)
         result_df = result_df.sort_values('timestamp').reset_index(drop=True)
         return result_df
     
