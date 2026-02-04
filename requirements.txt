@@ -1,6 +1,7 @@
 pandas
 openpyxl
-streamlit
+streamlit==1.30.0
+altair==4.2.2
 openai
 python-dateutil
 numpy
