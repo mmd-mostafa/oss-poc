@@ -88,8 +88,8 @@ def main():
         use_defaults = st.checkbox("Use default data files", value=True)
         
         if use_defaults:
-            default_kpi_path = "data/Fake data.xlsx"
-            default_alarms_path = "data/Fake alarms.json"
+            default_kpi_path = "data/new_data.xlsx"
+            default_alarms_path = "data/new_alarms.json"
             if os.path.exists(default_kpi_path) and os.path.exists(default_alarms_path):
                 kpi_path = default_kpi_path
                 alarms_path = default_alarms_path

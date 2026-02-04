@@ -199,8 +199,8 @@ The JSON file can be in one of two formats:
 ```
 oss-poc/
 ├── data/                      # Data files
-│   ├── Fake data.xlsx        # KPI data
-│   └── Fake alarms.json      # Alarm data
+│   ├── new_data.xlsx        # KPI data
+│   └── new_alarms.json      # Alarm data
 ├── src/                       # Source code modules
 │   ├── __init__.py
 │   ├── data_loader.py        # Data loading and parsing
@@ -292,8 +292,8 @@ oss-poc/
 ```
 oss-poc/
 ├── data/                      # Sample data files
-│   ├── Fake data.xlsx        # Sample KPI data
-│   └── Fake alarms.json      # Sample alarm data
+│   ├── new_data.xlsx        # Sample KPI data
+│   └── new_alarms.json      # Sample alarm data
 ├── src/                       # Source code modules
 │   ├── __init__.py
 │   ├── data_loader.py        # Data loading and parsing
