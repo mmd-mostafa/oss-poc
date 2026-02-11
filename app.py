@@ -12,6 +12,12 @@ import base64
 from src.pipeline import ProcessingPipeline
 from src.data_loader import load_kpi_data, load_alarms_data
 
+try:
+    from config import DEFAULT_MEDIAN_PERCENTAGE, DEFAULT_STATIC_THRESHOLD
+except ImportError:
+    DEFAULT_MEDIAN_PERCENTAGE = 90
+    DEFAULT_STATIC_THRESHOLD = 95.0
+
 
 def _format_status_timeline_short(timeline) -> str:
     """Format status_timeline list as compact string for display (e.g. '14:18:14 CRITICAL; 14:18:15 CLEARED')."""
@@ -37,10 +43,12 @@ st.set_page_config(
 )
 
 # Initialize session state
-if 'results' not in st.session_state:
+if "results" not in st.session_state:
     st.session_state.results = None
-if 'pipeline' not in st.session_state:
+if "pipeline" not in st.session_state:
     st.session_state.pipeline = None
+if "node_threshold_config" not in st.session_state:
+    st.session_state.node_threshold_config = {}
 
 
 def main():
@@ -114,17 +122,10 @@ def main():
                 alarms_path = None
         
         st.markdown("---")
-        
+
         # Processing parameters
         st.subheader("Processing Parameters")
-        percentile = st.slider(
-            "Percentile Threshold",
-            min_value=5,
-            max_value=25,
-            value=10,
-            help="Readings below this percentile are considered degraded"
-        )
-        
+        st.caption("Per-node thresholds are set in the **Threshold Settings** tab.")
         time_before = st.number_input(
             "Time Before (minutes)",
             min_value=0,
@@ -166,18 +167,29 @@ def main():
             st.error("Please provide both KPI and Alarms data files.")
             return
         
-        if use_llm and not os.getenv('OPENAI_API_KEY'):
+        if use_llm and not os.getenv("OPENAI_API_KEY"):
             st.error("OpenAI API key not found. Please set OPENAI_API_KEY in .env file.")
             return
-        
+
+        # Build per-node threshold config: use session state; fill missing nodes with defaults
+        kpi_df_for_config = load_kpi_data(kpi_path)
+        all_nodes = [str(n) for n in kpi_df_for_config["node"].unique()]
+        node_threshold_config = {}
+        for node_str in all_nodes:
+            cfg = st.session_state.node_threshold_config.get(node_str, {})
+            node_threshold_config[node_str] = {
+                "median_percentage": float(cfg.get("median_percentage", DEFAULT_MEDIAN_PERCENTAGE)),
+                "static_threshold": float(cfg.get("static_threshold", DEFAULT_STATIC_THRESHOLD)),
+            }
+
         # Initialize pipeline
         with st.spinner("Processing data..."):
             try:
                 pipeline = ProcessingPipeline(
-                    percentile=percentile,
+                    node_threshold_config=node_threshold_config,
                     time_before_min=time_before,
                     time_after_min=time_after,
-                    llm_model=llm_model
+                    llm_model=llm_model,
                 )
                 
                 # Progress tracking
@@ -224,41 +236,42 @@ def main():
         pipeline = st.session_state.pipeline
         
         # Tabs
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
             "📈 Overview",
             "📊 EDA",
+            "⚙️ Threshold Settings",
             "🔍 Degradation Details",
             "🏢 Node Analysis",
-            "🚨 Alarms Summary"
+            "🚨 Alarms Summary",
         ])
-        
+
         with tab1:
             show_overview(results, pipeline)
-        
         with tab2:
             show_eda_page(results, pipeline, kpi_path_for_eda, alarms_path_for_eda)
-        
         with tab3:
-            show_degradation_details(results, pipeline)
-        
+            show_threshold_settings_page(results["kpi_data"], kpi_path_for_eda, alarms_path_for_eda)
         with tab4:
-            show_node_analysis(results, pipeline)
-        
+            show_degradation_details(results, pipeline)
         with tab5:
+            show_node_analysis(results, pipeline)
+        with tab6:
             show_alarms_summary(results, pipeline)
     else:
-        # Show EDA tab even if data hasn't been processed
+        # Show EDA and Threshold Settings when data files are available but not yet processed
         if kpi_path_for_eda and alarms_path_for_eda:
-            tab1, tab2 = st.tabs([
+            tab1, tab2, tab3 = st.tabs([
                 "📊 EDA",
-                "ℹ️ Info"
+                "⚙️ Threshold Settings",
+                "ℹ️ Info",
             ])
-            
             with tab1:
                 show_eda_page(None, None, kpi_path_for_eda, alarms_path_for_eda)
-            
             with tab2:
-                st.info("👈 Configure parameters and click 'Process Data' to begin analysis.")
+                kpi_df_ts = load_data_for_eda(None, kpi_path_for_eda, alarms_path_for_eda)[0]
+                show_threshold_settings_page(kpi_df_ts, kpi_path_for_eda, alarms_path_for_eda)
+            with tab3:
+                st.info("👈 Set per-node thresholds in **Threshold Settings**, then click 'Process Data' to begin analysis.")
         else:
             st.info("👈 Configure parameters and click 'Process Data' to begin analysis.")
 
@@ -272,7 +285,7 @@ def show_overview(results: dict, pipeline: ProcessingPipeline):
     # Handle case where degradations_df might be None or empty
     if degradations_df is None or (isinstance(degradations_df, pd.DataFrame) and len(degradations_df) == 0):
         st.warning("No degradations detected.")
-        st.info("💡 Try adjusting the percentile threshold (lower values = more sensitive detection)")
+        st.info("💡 Adjust per-node **median percentage** and **static threshold** in the Threshold Settings tab.")
         return
     
     # Summary statistics
@@ -504,6 +517,134 @@ def show_degradation_details(results: dict, pipeline: ProcessingPipeline):
             st.info(analysis['analysis_summary'])
     else:
         st.info("LLM analysis not available for this degradation.")
+
+
+def show_threshold_settings_page(kpi_df: pd.DataFrame, kpi_path: str, alarms_path: str):
+    """
+    Per-node threshold settings: line chart with median, dynamic and static threshold lines.
+    Persists to st.session_state.node_threshold_config.
+    """
+    if kpi_df is None or len(kpi_df) == 0:
+        if kpi_path:
+            try:
+                kpi_df = load_kpi_data(kpi_path)
+            except Exception as e:
+                st.error(f"Could not load KPI data: {e}")
+                return
+        if kpi_df is None or len(kpi_df) == 0:
+            st.warning("No KPI data available. Load data files first.")
+            return
+
+    nodes = sorted(kpi_df["node"].astype(str).unique().tolist())
+    if not nodes:
+        st.warning("No nodes in KPI data.")
+        return
+
+    st.header("Threshold Settings")
+    st.caption(
+        "A point is considered degraded only if **both** conditions are met: "
+        "RRC SR < (median × percentage) **and** RRC SR < static threshold. "
+        "Settings are per node and used when you run Process Data."
+    )
+
+    selected_node = st.selectbox("Select Node", nodes, key="threshold_settings_node")
+
+    node_str = str(selected_node)
+    node_data = kpi_df[kpi_df["node"].astype(str) == node_str].sort_values("timestamp").copy()
+    if len(node_data) == 0:
+        st.warning(f"No data for node {selected_node}.")
+        return
+
+    median_val = float(node_data["rrc_sr"].median())
+    cfg = st.session_state.node_threshold_config.get(node_str, {})
+    median_pct = float(cfg.get("median_percentage", DEFAULT_MEDIAN_PERCENTAGE))
+    static_thr = float(cfg.get("static_threshold", DEFAULT_STATIC_THRESHOLD))
+    dynamic_thr = median_val * (median_pct / 100.0) if median_val > 0 else 0.0
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Median RRC SR", f"{median_val:.2f}%")
+    with col2:
+        median_pct_new = st.slider(
+            "Median percentage (%)",
+            min_value=50,
+            max_value=100,
+            value=int(round(median_pct)),
+            step=1,
+            key=f"median_pct_{node_str}",
+            help="Dynamic threshold = median × (this / 100). Readings below this are candidates for degradation.",
+        )
+        dynamic_thr_new = median_val * (median_pct_new / 100.0) if median_val > 0 else 0.0
+        st.caption(f"Dynamic threshold = **{dynamic_thr_new:.2f}%**")
+    with col3:
+        static_thr_new = st.number_input(
+            "Static threshold (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=static_thr,
+            step=0.5,
+            format="%.1f",
+            key=f"static_thr_{node_str}",
+            help="Absolute RRC SR floor. Readings must be below this and below the dynamic threshold to count as degraded.",
+        )
+
+    # Persist to session state
+    if node_str not in st.session_state.node_threshold_config:
+        st.session_state.node_threshold_config[node_str] = {}
+    st.session_state.node_threshold_config[node_str]["median_percentage"] = float(median_pct_new)
+    st.session_state.node_threshold_config[node_str]["static_threshold"] = float(static_thr_new)
+    dynamic_thr = median_val * (median_pct_new / 100.0) if median_val > 0 else 0.0
+
+    # Chart: RRC SR line + horizontal static + horizontal dynamic
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=node_data["timestamp"],
+            y=node_data["rrc_sr"],
+            mode="lines",
+            name="RRC SR",
+            line=dict(color="rgb(31, 119, 180)", width=1.5),
+        )
+    )
+    fig.add_hline(
+        y=static_thr_new,
+        line_dash="dash",
+        line_color="red",
+        annotation_text=f"Static: {static_thr_new:.1f}%",
+        annotation_position="top right",
+    )
+    fig.add_hline(
+        y=dynamic_thr,
+        line_dash="dot",
+        line_color="orange",
+        annotation_text=f"Dynamic: {dynamic_thr:.2f}%",
+        annotation_position="top right",
+    )
+    fig.add_hline(
+        y=median_val,
+        line_dash="solid",
+        line_color="gray",
+        opacity=0.7,
+        annotation_text=f"Median: {median_val:.2f}%",
+        annotation_position="top right",
+    )
+    fig.update_layout(
+        title=f"Node {selected_node} — RRC SR with thresholds",
+        xaxis_title="Time",
+        yaxis_title="RRC SR (%)",
+        height=450,
+        showlegend=True,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    if st.button("Apply current settings to all nodes", key="apply_all_thresholds"):
+        for n in nodes:
+            if n not in st.session_state.node_threshold_config:
+                st.session_state.node_threshold_config[n] = {}
+            st.session_state.node_threshold_config[n]["median_percentage"] = float(median_pct_new)
+            st.session_state.node_threshold_config[n]["static_threshold"] = float(static_thr_new)
+        st.success(f"Applied median % = {median_pct_new} and static = {static_thr_new}% to all {len(nodes)} nodes.")
+        st.rerun()
 
 
 def show_node_analysis(results: dict, pipeline: ProcessingPipeline):

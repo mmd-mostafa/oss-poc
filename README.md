@@ -14,7 +14,7 @@ Perfect for network operations centers (NOCs) and network engineers who need to 
 
 ## Features
 
-- **Degradation Detection**: Automatically detects RRC SR degradations using configurable percentile-based thresholds
+- **Degradation Detection**: Automatically detects RRC SR degradations using per-node median-based and static thresholds (both conditions must be met)
 - **Alarm Correlation**: Finds and correlates FM alarms within configurable time windows around degradation periods
 - **AI-Powered Analysis**: Uses OpenAI LLM to evaluate correlations and determine causal relationships
 - **Interactive UI**: Streamlit-based web interface for visualization and analysis
@@ -31,6 +31,12 @@ Perfect for network operations centers (NOCs) and network engineers who need to 
   - Paid tier required for production use
 
 ### Setup
+
+**Note:** This project uses the **qeems-oss** conda environment. Activate it before running the app or installing packages:
+
+```bash
+conda activate qeems-oss
+```
 
 1. **Clone the repository:**
    ```bash
@@ -51,13 +57,17 @@ Perfect for network operations centers (NOCs) and network engineers who need to 
    source venv/bin/activate
    ```
    
-   **Option B: Using conda:**
+   **Option B: Using conda (recommended — use qeems-oss):**
    ```bash
-   conda create -n oss-poc python=3.11
-   conda activate oss-poc
+   # If the qeems-oss env already exists (contains project packages):
+   conda activate qeems-oss
+
+   # Or create a new env and install:
+   conda create -n qeems-oss python=3.11
+   conda activate qeems-oss
    ```
 
-3. **Install required packages:**
+3. **Install required packages (if not already in qeems-oss):**
    ```bash
    pip install -r requirements.txt
    ```
@@ -82,7 +92,11 @@ Perfect for network operations centers (NOCs) and network engineers who need to 
 
 ### Quick Start
 
-1. **Ensure your virtual environment is activated** (if using one)
+1. **Activate the conda environment** (recommended):
+   ```bash
+   conda activate qeems-oss
+   ```
+   Or ensure your virtual environment is activated if using venv.
 
 2. **Start the Streamlit application:**
    ```bash
@@ -99,10 +113,8 @@ Perfect for network operations centers (NOCs) and network engineers who need to 
    - Or upload your own KPI Excel and Alarms JSON files
 
 5. **Configure and process:**
-   - Adjust processing parameters in the sidebar:
-     - **Percentile Threshold**: Lower values detect more degradations (default: 10)
-     - **Time Before/After**: Time window to search for alarms (default: 30 minutes)
-     - **LLM Model**: Choose the OpenAI model for analysis
+   - Set per-node thresholds in the **Threshold Settings** tab (median percentage and static threshold; optional—defaults apply if not set)
+   - Adjust processing parameters in the sidebar: **Time Before/After** (default: 30 minutes), **LLM Model**
    - Click "🚀 Process Data" to run the analysis
    - Results will appear in the tabs below
 
@@ -163,7 +175,7 @@ The JSON file can be in one of two formats:
 
 ### Configuration Parameters
 
-- **Percentile Threshold** (5-25, default: 10): Readings below this percentile are considered degraded
+- **Per-node thresholds** (Threshold Settings tab): **Median percentage** (default 90) and **Static threshold** (default 95%). A reading is degraded only if below both. Set per node; nodes without settings use defaults.
 - **Time Before** (0-120 minutes, default: 30): Minutes before degradation start to search for alarms
 - **Time After** (0-120 minutes, default: 30): Minutes after degradation end to search for alarms
 - **LLM Model**: Choose between gpt-4o-mini, gpt-4o, or gpt-3.5-turbo
@@ -175,6 +187,11 @@ The JSON file can be in one of two formats:
 - See degradations over time
 - Filter by node and severity
 - View degradations table
+
+#### Threshold Settings Tab
+- Select a node and set **median percentage** and **static threshold** per node
+- View line chart with RRC SR, median, and both threshold lines (updated as you change values)
+- Option to apply current settings to all nodes
 
 #### Degradation Details Tab
 - Select a specific degradation
@@ -221,8 +238,8 @@ oss-poc/
 
 1. **Data Loading**: Loads KPI data from Excel and alarm data from JSON
 2. **Degradation Detection**: 
-   - Calculates percentile-based thresholds for each node
-   - Identifies readings below threshold
+   - Computes median per node; applies per-node median percentage and static threshold (from Threshold Settings or defaults)
+   - Marks readings degraded only if below both the dynamic (median × percentage) and static threshold
    - Groups consecutive degraded readings into degradation periods
 3. **Alarm Correlation**:
    - Extracts node identifiers from alarms
@@ -274,11 +291,11 @@ oss-poc/
 - For KPI: Dates should be parseable by pandas (standard date formats work)
 
 ### No Degradations Detected
-- **Try a lower percentile threshold** (e.g., 5 instead of 10) - this makes detection more sensitive
+- In **Threshold Settings**, try a **lower median percentage** (e.g. 85 or 80) or **lower static threshold** to make detection more sensitive
 - Verify KPI data contains valid RRC SR values (check for NaN or invalid numbers)
 - Check that timestamps are correctly parsed (look at the debug message after processing)
 - Ensure you have enough data points per node (at least 10-20 readings recommended)
-- Check the data range - degradations are relative to each node's historical performance
+- Degradations require readings below both the dynamic and static threshold per node
 
 ### Performance Issues
 - **LLM analysis is slow**: This is normal - each degradation requires an API call

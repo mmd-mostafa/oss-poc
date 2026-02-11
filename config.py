@@ -8,7 +8,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Default configuration values
-DEFAULT_PERCENTILE = 10
+DEFAULT_PERCENTILE = 10  # Legacy; no longer used for detection
+DEFAULT_MEDIAN_PERCENTAGE = 90  # Dynamic threshold = median * (this / 100)
+DEFAULT_STATIC_THRESHOLD = 95.0  # Absolute RRC SR % floor; both conditions must be met
 DEFAULT_TIME_BEFORE_MIN = 30
 DEFAULT_TIME_AFTER_MIN = 30
 DEFAULT_LLM_MODEL = "gpt-4o-mini"

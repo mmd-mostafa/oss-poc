@@ -2,7 +2,7 @@
 Main processing pipeline for degradation detection and alarm correlation.
 """
 import pandas as pd
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 from .data_loader import load_kpi_data, load_alarms_data
 from .degradation_detector import DegradationDetector
 from .alarm_correlator import AlarmCorrelator
@@ -11,33 +11,34 @@ from .llm_agent import LLMAgent
 
 class ProcessingPipeline:
     """Orchestrates the complete processing workflow."""
-    
+
     def __init__(
         self,
-        percentile: float = 10,
+        node_threshold_config: Optional[Dict[str, Dict[str, Any]]] = None,
         time_before_min: int = 30,
         time_after_min: int = 30,
         llm_model: str = "gpt-4o-mini",
-        llm_api_key: Optional[str] = None
+        llm_api_key: Optional[str] = None,
     ):
         """
         Initialize processing pipeline.
-        
+
         Args:
-            percentile: Percentile threshold for degradation detection
+            node_threshold_config: Per-node config { node_id: {"median_percentage": float, "static_threshold": float} }.
+                Nodes missing from config use defaults from config module.
             time_before_min: Minutes before degradation to search for alarms
             time_after_min: Minutes after degradation to search for alarms
             llm_model: OpenAI model to use
             llm_api_key: OpenAI API key (if None, loads from env)
         """
-        self.percentile = percentile
+        self.node_threshold_config = node_threshold_config or {}
         self.time_before_min = time_before_min
         self.time_after_min = time_after_min
-        
+
         self.detector = DegradationDetector()
         self.correlator = AlarmCorrelator()
         self.llm_agent = LLMAgent(model=llm_model, api_key=llm_api_key)
-        
+
         self.kpi_df: Optional[pd.DataFrame] = None
         self.alarms_df: Optional[pd.DataFrame] = None
         self.degradations_df: Optional[pd.DataFrame] = None
@@ -62,14 +63,14 @@ class ProcessingPipeline:
         print(f"Loaded {len(self.alarms_df)} alarms")
     
     def detect_degradations(self):
-        """Detect degradations in KPI data."""
+        """Detect degradations in KPI data using per-node median + static thresholds."""
         if self.kpi_df is None:
             raise ValueError("KPI data not loaded. Call load_data() first.")
-        
-        print(f"Detecting degradations using {self.percentile}th percentile threshold...")
+
+        print("Detecting degradations using per-node median + static thresholds...")
         self.degradations_df = self.detector.detect_degradations(
             self.kpi_df,
-            percentile=self.percentile
+            node_config=self.node_threshold_config,
         )
         print(f"Found {len(self.degradations_df)} degradation periods")
     
@@ -213,35 +214,34 @@ class ProcessingPipeline:
 def process_degradations(
     kpi_path: str,
     alarms_path: str,
-    percentile: float = 10,
+    node_threshold_config: Optional[Dict[str, Dict[str, Any]]] = None,
     time_before: int = 30,
     time_after: int = 30,
     use_llm: bool = True,
     llm_model: str = "gpt-4o-mini",
-    llm_api_key: Optional[str] = None
+    llm_api_key: Optional[str] = None,
 ) -> Dict:
     """
     Convenience function to process degradations.
-    
+
     Args:
         kpi_path: Path to Excel file with KPI data
         alarms_path: Path to JSON file with alarm data
-        percentile: Percentile threshold for degradation detection
+        node_threshold_config: Per-node { node_id: {"median_percentage", "static_threshold"} }; nodes missing use defaults
         time_before: Minutes before degradation to search
         time_after: Minutes after degradation to search
         use_llm: Whether to use LLM evaluation
         llm_model: OpenAI model to use
         llm_api_key: OpenAI API key (if None, loads from env)
-        
+
     Returns:
         Dictionary with all results
     """
     pipeline = ProcessingPipeline(
-        percentile=percentile,
+        node_threshold_config=node_threshold_config or {},
         time_before_min=time_before,
         time_after_min=time_after,
         llm_model=llm_model,
-        llm_api_key=llm_api_key
+        llm_api_key=llm_api_key,
     )
-    
     return pipeline.process(kpi_path, alarms_path, use_llm=use_llm)

@@ -55,10 +55,10 @@ The system consists of several interconnected components:
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    Streamlit Web UI (app.py)                 │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  │
-│  │Overview  │  │   EDA    │  │Degradation│  │  Node    │  │
-│  │  Tab     │  │   Tab    │  │  Details  │  │ Analysis │  │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘  │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────┐  ┌──────────┐  ┌──────────┐  │
+│  │Overview  │  │   EDA    │  │  Threshold  │  │Degradation│  │  Node    │  │
+│  │  Tab     │  │   Tab    │  │  Settings   │  │  Details  │  │ Analysis │  │
+│  └──────────┘  └──────────┘  └──────────────┘  └──────────┘  └──────────┘  │
 └─────────────────────────────────────────────────────────────┘
                             │
                             ▼
@@ -121,14 +121,13 @@ The system consists of several interconnected components:
 
 ### 2. Degradation Detector (`src/degradation_detector.py`)
 
-**Purpose**: Detects degradation periods in RRC SR KPI data using percentile-based thresholds.
+**Purpose**: Detects degradation periods in RRC SR KPI data using **median-based plus static thresholds**. A reading is degraded only if **both** conditions are met: RRC SR is below (median × percentage) and below the static threshold.
 
 #### Key Methods
 
-- **`calculate_threshold()`**: Calculates percentile threshold for a specific node
-- **`calculate_all_thresholds()`**: Calculates thresholds for all nodes
-- **`detect_degradations()`**: Main method that identifies degradation periods
-- **`get_node_statistics()`**: Computes statistical summaries per node
+- **`get_node_medians(df)`**: Computes the median RRC SR for each node
+- **`detect_degradations(df, node_config, ...)`**: Main method; accepts per-node config (`median_percentage`, `static_threshold`) and identifies periods where readings are below both the dynamic threshold (median × percentage) and the static threshold
+- **`get_node_statistics(df)`**: Computes statistical summaries per node
 
 ### 3. Alarm Correlator (`src/alarm_correlator.py`)
 
@@ -172,9 +171,10 @@ The system consists of several interconnected components:
 
 1. **Overview**: Summary statistics and high-level visualizations
 2. **EDA**: Exploratory Data Analysis for KPI and alarms data
-3. **Degradation Details**: Detailed view of individual degradations
-4. **Node Analysis**: Node-specific analysis and timelines
-5. **Alarms Summary**: Summary of all correlated alarms
+3. **Threshold Settings**: Per-node degradation thresholds (median percentage and static threshold); line chart with median and two horizontal reference lines
+4. **Degradation Details**: Detailed view of individual degradations
+5. **Node Analysis**: Node-specific analysis and timelines
+6. **Alarms Summary**: Summary of all correlated alarms
 
 ---
 
@@ -182,61 +182,67 @@ The system consists of several interconnected components:
 
 ### Threshold Calculation
 
-The system uses **percentile-based thresholds** to detect degradations. This approach is adaptive and node-specific.
+The system uses **median-based plus static thresholds** to detect degradations. Settings are **per node** and configurable in the **Threshold Settings** tab. A reading is considered degraded only if **both** of the following conditions are met:
+
+1. **Dynamic condition**: `rrc_sr < (median_percentage / 100) × median` — the value is below a given percentage of the node’s median RRC SR.
+2. **Static condition**: `rrc_sr < static_threshold` — the value is below an absolute RRC SR floor (e.g. 95%).
 
 #### How Thresholds Are Set
 
-1. **Per-Node Calculation**: Each node gets its own threshold based on its historical performance
-2. **Percentile Method**: 
-   - Default: 10th percentile (configurable from 5-25)
-   - For each node, calculate the 10th percentile of all RRC SR values
-   - This becomes the baseline threshold for that node
-3. **Rationale**: 
-   - Lower percentiles (e.g., 5th) = more sensitive detection (more degradations detected)
-   - Higher percentiles (e.g., 25th) = less sensitive detection (fewer degradations detected)
-   - Node-specific thresholds account for different baseline performance levels
+1. **Per-Node Median**: For each node, the median of all RRC SR values is computed.
+2. **Per-Node Configuration**: Each node has:
+   - **Median percentage** (e.g. 90): Dynamic threshold = median × (percentage / 100). Lower percentage = stricter (more degradations).
+   - **Static threshold** (e.g. 95): Absolute RRC SR %; readings must be below this as well.
+3. **Both conditions required**: A point is degraded only if it is below **both** the dynamic threshold and the static threshold. This avoids flagging “normal” low values that are still above the static bar.
+4. **Defaults**: If a node has no saved settings, default median percentage (e.g. 90) and default static threshold (e.g. 95) from config are used.
 
 #### Example
 
-If a node has RRC SR values: [98.5, 99.2, 98.8, 97.5, 99.0, 98.2, 99.5, 98.0, 97.8, 99.1]
+Node "1900" has median RRC SR = 98.5%, median percentage = 90%, static threshold = 95%.
 
-- 10th percentile = 97.5%
-- Any reading below 97.5% is considered degraded
+- Dynamic threshold = 98.5 × 0.90 = 88.65%
+- A reading of 94% is below static (95%) but above dynamic (88.65%) → **not** degraded (only one condition met).
+- A reading of 88% is below both 88.65% and 95% → **degraded**.
 
 ### Degradation Detection Process
 
-#### Step 1: Identify Degraded Readings
+#### Step 1: Compute Medians and Thresholds
 
 For each node:
-1. Compare each RRC SR reading against the node's threshold
-2. Mark readings as degraded if `rrc_sr < threshold`
+1. Compute median of RRC SR values.
+2. Get per-node config (median_percentage, static_threshold) or use defaults.
+3. Dynamic threshold = median × (median_percentage / 100).
+4. Effective baseline (for severity) = min(dynamic_threshold, static_threshold).
 
-#### Step 2: Group Consecutive Degradations
+#### Step 2: Identify Degraded Readings
 
-1. Group consecutive degraded readings together
-2. Each group represents a potential degradation period
+For each node:
+1. Mark a reading as degraded if `rrc_sr < dynamic_threshold` **and** `rrc_sr < static_threshold`.
 
-#### Step 3: Calculate Degradation Periods
+#### Step 3: Group Consecutive Degradations
+
+1. Group consecutive degraded readings together.
+2. Each group is a candidate degradation period.
+
+#### Step 4: Calculate Degradation Periods
 
 For each group of consecutive degraded readings:
 
 1. **Start Time**: Minimum timestamp in the group
 2. **End Time**: Maximum timestamp in the group
 3. **Minimum Value**: Lowest RRC SR value during the period
-4. **Duration**: 
-   - For multiple readings: `(end_time - start_time) + median_time_interval`
-   - For single reading: Time to next reading or default 1 hour
-5. **Baseline Value**: The threshold (percentile) value
-6. **Deviation Percent**: `((threshold - min_value) / threshold) * 100`
+4. **Duration**: Same as before (multiple readings: end − start + median interval; single: time to next or 1 hour)
+5. **Baseline Value**: The effective threshold (min of dynamic and static) used for deviation
+6. **Deviation Percent**: `((effective_threshold - min_value) / effective_threshold) × 100`
 
-#### Step 4: Filter by Minimum Duration
+#### Step 5: Filter by Minimum Duration
 
-- Default minimum duration: 5 minutes
-- Degradation periods shorter than this are filtered out
+- Default minimum duration: 5 minutes.
+- Periods shorter than this are filtered out.
 
-#### Step 5: Assign Severity
+#### Step 6: Assign Severity
 
-Based on deviation percentage:
+Based on deviation from the effective threshold:
 
 - **CRITICAL**: Deviation > 50% below threshold
 - **MAJOR**: Deviation > 25% below threshold
@@ -245,20 +251,19 @@ Based on deviation percentage:
 
 ### Example Degradation Detection
 
-**Scenario**: Node "MRBTS-1900" with threshold = 98.0%
+**Scenario**: Node "1900", median = 98.5%, median percentage = 90%, static = 95%. Dynamic = 88.65%, effective = 88.65%.
 
 **Readings**:
 - 10:00 - 98.5% (normal)
-- 11:00 - 97.2% (degraded)
-- 12:00 - 96.8% (degraded)
-- 13:00 - 97.0% (degraded)
-- 14:00 - 98.3% (normal)
+- 11:00 - 87% (degraded: below both 88.65 and 95)
+- 12:00 - 86% (degraded)
+- 13:00 - 87.5% (degraded)
+- 14:00 - 96% (normal: below static but above dynamic, so not degraded)
 
 **Result**:
 - Degradation period: 11:00 to 13:00
-- Minimum value: 96.8%
-- Duration: ~3 hours (assuming hourly data)
-- Deviation: ((98.0 - 96.8) / 98.0) * 100 = 1.22%
+- Minimum value: 86%
+- Deviation: ((88.65 - 86) / 88.65) × 100 ≈ 2.99%
 - Severity: WARNING
 
 ---
@@ -407,11 +412,12 @@ Based on the analysis, the LLM suggests actions such as:
 - Option to use default sample files
 
 **Processing Parameters**:
-- **Percentile Threshold** (5-25, default: 10): Controls sensitivity of degradation detection
 - **Time Before** (0-120 minutes, default: 30): Minutes before degradation to search for alarms
 - **Time After** (0-120 minutes, default: 30): Minutes after degradation to search for alarms
 - **Use LLM Analysis**: Toggle to enable/disable AI analysis
 - **LLM Model**: Select OpenAI model (gpt-4o-mini, gpt-4o, gpt-3.5-turbo)
+
+Per-node degradation thresholds (median percentage and static threshold) are set in the **Threshold Settings** tab, not in the sidebar.
 
 ### Main Tabs
 
@@ -457,7 +463,24 @@ Based on the analysis, the LLM suggests actions such as:
   - Top problems tables
   - Alarms table
 
-#### 3. Degradation Details Tab
+#### 3. Threshold Settings Tab
+
+**Purpose**: Configure per-node degradation thresholds used when running **Process Data**. A reading is degraded only if it is below **both** the dynamic threshold (median × percentage) and the static threshold.
+
+**Features**:
+- **Node selector**: Dropdown of all nodes present in the loaded KPI data
+- **Per-node controls** (stored in session and used on Process Data):
+  - **Median percentage** (e.g. 50–100%, default 90): Dynamic threshold = median × (percentage / 100). Updated as soon as the user changes the value.
+  - **Static threshold** (e.g. 0–100%, default 95): Absolute RRC SR %; readings must be below this to count as degraded
+- **Line chart** for the selected node:
+  - RRC SR time series
+  - **Median** horizontal line (gray)
+  - **Dynamic threshold** horizontal line (orange), recomputed when median percentage changes
+  - **Static threshold** horizontal line (red)
+- **Apply to all nodes**: Button to copy the current node’s median percentage and static threshold to every other node
+- Settings are persisted in session state and applied when the user clicks **Process Data**; nodes without saved settings use default median percentage and static threshold from config
+
+#### 4. Degradation Details Tab
 
 **Features**:
 - Select specific degradation from dropdown
@@ -471,7 +494,7 @@ Based on the analysis, the LLM suggests actions such as:
   - Recommended actions
   - Detailed analysis summary
 
-#### 4. Node Analysis Tab
+#### 5. Node Analysis Tab
 
 **Features**:
 - Select node from dropdown
@@ -481,7 +504,7 @@ Based on the analysis, the LLM suggests actions such as:
   - RRC SR values over time
 - Degradations table for the node
 
-#### 5. Alarms Summary Tab
+#### 6. Alarms Summary Tab
 
 **Features**:
 - Summary statistics (total correlated alarms—unique by alarm ID—unique types, unique severities)
@@ -496,10 +519,11 @@ Based on the analysis, the LLM suggests actions such as:
 
 ### Degradation Detection Parameters
 
-| Parameter | Range | Default | Description |
-|-----------|-------|---------|-------------|
-| Percentile Threshold | 5-25 | 10 | Lower values = more sensitive detection. Percentage of readings below which are considered degraded. |
-| Min Duration (minutes) | 1+ | 5 | Minimum duration for a degradation period to be reported. |
+| Parameter | Scope | Range/Default | Description |
+|-----------|--------|----------------|-------------|
+| Median percentage | Per node (Threshold Settings tab) | Default 90 | Dynamic threshold = median × (this / 100). Lower = stricter. Set per node in Threshold Settings. |
+| Static threshold | Per node (Threshold Settings tab) | Default 95 (%) | Absolute RRC SR floor. A reading is degraded only if below both this and the dynamic threshold. Set per node in Threshold Settings. |
+| Min Duration (minutes) | Global | 1+, default 5 | Minimum duration for a degradation period to be reported. |
 
 ### Alarm Correlation Parameters
 
@@ -586,7 +610,7 @@ Based on the analysis, the LLM suggests actions such as:
    - System loads and standardizes both datasets
 
 2. **Configuration**
-   - User sets percentile threshold (default: 10)
+   - User sets per-node thresholds in the **Threshold Settings** tab (median percentage and static threshold; optional, defaults used if not set)
    - User sets time window parameters (default: 30 minutes before/after)
    - User enables/disables LLM analysis
    - User selects LLM model
@@ -594,8 +618,8 @@ Based on the analysis, the LLM suggests actions such as:
 3. **Processing**
    - User clicks "Process Data" button
    - System detects degradations:
-     - Calculates thresholds for each node
-     - Identifies degraded readings
+     - Computes median per node; applies per-node config (or defaults)
+     - Marks readings degraded only if below both dynamic (median × percentage) and static threshold
      - Groups consecutive degradations
      - Calculates degradation periods
      - Assigns severity levels
@@ -635,12 +659,12 @@ Based on the analysis, the LLM suggests actions such as:
 #### No Degradations Detected
 
 **Possible Causes**:
-- Percentile threshold too high (try lowering to 5)
-- Data doesn't contain low values
+- Median percentage too low or static threshold too high (thresholds too loose)
+- Data doesn't contain values below both thresholds
 - Minimum duration filter too strict
 
 **Solutions**:
-- Lower percentile threshold (e.g., from 10 to 5)
+- In **Threshold Settings**, lower the median percentage (e.g. 85 or 80) or lower the static threshold so more readings can qualify as degraded
 - Check data quality and range
 - Verify timestamps are correctly parsed
 
@@ -690,9 +714,10 @@ Based on the analysis, the LLM suggests actions such as:
 
 ### Threshold Selection
 
-- **Start with default (10th percentile)**: Good balance between sensitivity and false positives
-- **Lower for more sensitivity**: Use 5th percentile if you want to catch more degradations
-- **Higher for fewer false positives**: Use 20-25th percentile if getting too many false alarms
+- **Start with defaults** (e.g. median percentage 90, static threshold 95): Good balance between sensitivity and false positives
+- **Lower median percentage or static threshold for more sensitivity**: More readings will fall below both bars and be flagged as degraded
+- **Raise median percentage or static threshold for fewer false positives**: Stricter bars mean fewer degradations reported
+- Use the **Threshold Settings** tab to tune per node and to see the median and both threshold lines on the chart
 
 ### Time Window Configuration
 
