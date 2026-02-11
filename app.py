@@ -465,19 +465,13 @@ def show_degradation_details(results: dict, pipeline: ProcessingPipeline):
         analysis = llm_analyses[actual_idx]
         
         verdict = analysis.get('overall_verdict', 'unknown')
-        confidence = analysis.get('confidence_score', 0.0)
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            verdict_color = {
-                'causal': '🟢',
-                'possible': '🟡',
-                'coincidental': '🟠',
-                'no_correlation': '🔴'
-            }.get(verdict, '⚪')
-            st.metric("Verdict", f"{verdict_color} {verdict.upper()}")
-        with col2:
-            st.metric("Confidence", f"{confidence:.1%}")
+        verdict_color = {
+            'causal': '🟢',
+            'possible': '🟡',
+            'coincidental': '🟠',
+            'no_correlation': '🔴'
+        }.get(verdict, '⚪')
+        st.metric("Verdict", f"{verdict_color} {verdict.upper()}")
         
         # Top reasons
         if analysis.get('top_reasons'):
@@ -494,8 +488,11 @@ def show_degradation_details(results: dict, pipeline: ProcessingPipeline):
         if analysis.get('alarm_analysis'):
             st.write("**Per-Alarm Analysis:**")
             for alarm_analysis in analysis['alarm_analysis']:
-                with st.expander(f"Alarm {alarm_analysis.get('alarm_id', 'Unknown')} - Relevance: {alarm_analysis.get('relevance_score', 0):.1%}"):
-                    st.write(f"**Is Causal:** {alarm_analysis.get('is_causal', False)}")
+                with st.expander(f"Alarm {alarm_analysis.get('alarm_id', 'Unknown')}"):
+                    is_causal = alarm_analysis.get('is_causal', False)
+                    causal_color = "red" if is_causal else "green"
+                    causal_text = "True" if is_causal else "False"
+                    st.markdown(f"**Is Causal:** :{causal_color}[{causal_text}]")
                     st.write(f"**Reasoning:** {alarm_analysis.get('reasoning', 'N/A')}")
                     if alarm_analysis.get('lifespan_note'):
                         st.write(f"**Lifespan:** {alarm_analysis['lifespan_note']}")

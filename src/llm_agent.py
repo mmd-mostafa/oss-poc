@@ -112,12 +112,10 @@ Provide your analysis in the following JSON format. Include the optional fields 
 
 {{
     "overall_verdict": "causal" | "possible" | "coincidental" | "no_correlation",
-    "confidence_score": 0.0-1.0,
     "root_cause_analysis": "optional: short paragraph on likely root cause(s) and how alarm lifespans support or contradict that",
     "alarm_analysis": [
         {{
             "alarm_id": "string",
-            "relevance_score": 0.0-1.0,
             "is_causal": true/false,
             "reasoning": "explanation",
             "lifespan_note": "optional: e.g. Cleared during window at 14:18:15 or Still active at end of time window",
@@ -209,7 +207,6 @@ If no alarms are found, recommend further investigation steps."""
                 # Fallback response if JSON parsing fails
                 return {
                     "overall_verdict": "no_correlation",
-                    "confidence_score": 0.0,
                     "root_cause_analysis": "",
                     "alarm_analysis": [],
                     "top_reasons": ["Failed to parse LLM response"],
@@ -222,7 +219,6 @@ If no alarms are found, recommend further investigation steps."""
                     continue
                 return {
                     "overall_verdict": "no_correlation",
-                    "confidence_score": 0.0,
                     "root_cause_analysis": "",
                     "alarm_analysis": [],
                     "top_reasons": ["LLM API error"],
@@ -234,7 +230,6 @@ If no alarms are found, recommend further investigation steps."""
         # Should not reach here, but just in case
         return {
             "overall_verdict": "no_correlation",
-            "confidence_score": 0.0,
             "root_cause_analysis": "",
             "alarm_analysis": [],
             "top_reasons": ["Unknown error"],
