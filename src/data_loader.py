@@ -285,8 +285,10 @@ def load_alarms_data(json_path: str) -> pd.DataFrame:
         alarm_cleared = parse_alarm_timestamp(alarm.get('alarmClearedTime', ''))
         event_time = parse_alarm_timestamp(alarm.get('nbiEventTime', ''))
         
-        # Use event_time as primary timestamp if available
-        primary_timestamp = event_time or alarm_raised
+        # Use alarm_raised as primary timestamp for correlation (when the fault occurred).
+        # nbiEventTime can be delayed (processing/delivery) and would exclude alarms from
+        # the degradation window even when they occurred during the degradation.
+        primary_timestamp = alarm_raised or event_time
         
         alarm_records.append({
             'alarm_id': alarm.get('alarmId', ''),
